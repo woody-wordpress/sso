@@ -18,10 +18,13 @@ if (is_user_logged_in()) {
 $options = get_option('woody_sso_options');
 $user_redirect_set = $options['redirect_to_dashboard'] == '1' ? get_dashboard_url() : site_url();
 $user_redirect = apply_filters('wpssoc_user_redirect_url', $user_redirect_set);
-
+if (WP_ENV != 'PROD') {
+    $options['server_url'] = 'https://connect.rc-preprod.com';
+    $options['client_id'] = 'wordpress';
+    $options['client_secret'] = 'b77c3bf6-0dbb-4f6a-a2dd-9f688717ddf7';
+}
 if (!isset($_GET['code'])) {
     $params = array(
-        'oauth'         => 'authorize',
         'response_type' => 'code',
         'client_id'     => $options['client_id'],
         'client_secret' => $options['client_secret'],
@@ -29,14 +32,14 @@ if (!isset($_GET['code'])) {
         'application'   => 'wordpress',
     );
 
-    wp_redirect($options['server_url'] . '/oauth/v2/auth?' . http_build_query($params));
+    wp_redirect($options['server_url'] . '/authorize?' . http_build_query($params));
     exit;
 }
 
 // Handle the callback from the server is there is one.
 if (!empty($_GET['code'])) {
     $code = sanitize_text_field($_GET['code']);
-    $server_url = $options['server_url'] . '/oauth/v2/token';
+    $server_url = $options['server_url'] . '/token';
 
     /**
      * default arg values to know :
@@ -56,8 +59,6 @@ if (!empty($_GET['code'])) {
             'client_id'     => $options['client_id'],
             'client_secret' => $options['client_secret'],
             'redirect_uri'  => site_url('/oauth/v2/auth?auth=sso'),
-            'idp_application' => 'woody_' . WP_ENV,
-            'site_key'      => WP_SITE_KEY
         ),
         'cookies'     => array(),
         'sslverify'   => false
@@ -69,29 +70,28 @@ if (!empty($_GET['code'])) {
         wp_die($tokens->error_description);
     }
 
-    $server_url = $options['server_url'] . '/api/me?access_token=' . $tokens->access_token;
+    $server_url = $options['server_url'] . '/userinfo';
 
     $response = wp_remote_get($server_url, array(
         'timeout'     => 45,
-        'headers'     => array(),
-        'sslverify'   => false
+        'headers'     => array(
+            'Authorization' => $tokens->access_token,
+        ),
+        'sslverify'   => false,
     ));
+
+
 
     $wpRoles = [];
     $user_info = json_decode($response['body'], null, 512, JSON_THROW_ON_ERROR);
+
     if (!empty($user_info)) {
         if (in_array('wp_admin', $user_info->roles)) {
             $wpRoles = ['administrator'];
         } else {
-            foreach ($user_info->products as $product) {
-                if ($product->technical_name === 'website' && $product->slug === 'wordpress' && $product->key === WP_SITE_KEY) {
-                    foreach ($user_info->roles as $role) {
-                        if (strpos($role, 'wp_') !== false) {
-                            $wpRoles[] = str_replace('wp_', '', $role);
-                        }
-                    }
-
-                    break;
+            foreach ($user_info->roles as $role) {
+                if (strpos($role, 'WP_') !== false) {
+                    $wpRoles[] = strtolower(str_replace('WP_', '', $role));
                 }
             }
         }
